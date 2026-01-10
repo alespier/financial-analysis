@@ -1,0 +1,248 @@
+-- Create temp table with growth calculation and null flag
+
+DROP TABLE IF EXISTS TMP_CALC_METRICS;
+CREATE TABLE TMP_CALC_METRICS AS 
+    SELECT
+        ticker
+        ,quarter
+        ,GrossProfit
+        ,TotalRevenue
+        ,FreeCashFlow
+        ,ROUND(
+            (
+                (GrossProfit - LAG(GrossProfit) OVER (PARTITION BY ticker ORDER BY quarter))
+                / NULLIF(LAG(GrossProfit) OVER (PARTITION BY ticker ORDER BY quarter), 0)
+            ) * 100, 2
+        ) AS GrossProfitGrowth
+        ,ROUND(
+            (
+                (TotalRevenue - LAG(TotalRevenue) OVER (PARTITION BY ticker ORDER BY quarter))
+                / NULLIF(LAG(TotalRevenue) OVER (PARTITION BY ticker ORDER BY quarter), 0)
+            ) * 100, 2
+        ) AS TotalRevenueGrowth
+        ,ROUND(
+            (
+                (FreeCashFlow - LAG(FreeCashFlow) OVER (PARTITION BY ticker ORDER BY quarter))
+                / NULLIF(LAG(FreeCashFlow) OVER (PARTITION BY ticker ORDER BY quarter), 0)
+            ) * 100, 2
+        ) AS FreeCashFlowGrowth
+        ,CASE 
+            WHEN 
+                (GrossProfit IS NULL OR GrossProfit = 0.0)
+                AND (TotalRevenue IS NULL OR TotalRevenue = 0.0)
+                AND (FreeCashFlow IS NULL OR FreeCashFlow = 0.0)
+            THEN 1
+            ELSE 0
+        END AS NullFlag
+    FROM TGTMETRICS
+;
+
+-- Filter metrics table to exclude rows where the metrics are null
+
+DROP TABLE IF EXISTS CALC_METRICS;
+CREATE TABLE CALC_METRICS AS
+    SELECT 
+        TMP.ticker
+        ,TMP.quarter
+        ,TMP.GrossProfitGrowth
+        ,TMP.TotalRevenueGrowth
+        ,TMP.FreeCashFlowGrowth
+        ,C.rating
+        ,SI.sector
+        ,C.industry
+    FROM TMP_CALC_METRICS AS TMP
+        LEFT JOIN MCOMPANIES AS C ON 1=1
+            AND C.symbol = TMP.ticker
+        LEFT JOIN MSECTORINDUSTRY AS SI ON 1=1
+            AND SI.industry = C.industry
+    WHERE 1=1
+        AND NullFlag = 0
+;
+
+-- Cleanup
+DROP TABLE IF EXISTS TMP_CALC_METRICS;
+
+
+------------------------------------------------------------
+------------------------------------------------------------
+-- FUNDAMENTAL STRATEGIES
+------------------------------------------------------------
+------------------------------------------------------------
+
+-- Develop strategies for all 3 metrics individually before moving to the integrated strategy.
+-- All 3 strategies will be two-fold: getting an average growth per metric in the considered periods, and a comparison of these metrics with it's peers in the same industry.
+
+-- Gross Profit Growth Strategy
+
+DROP TABLE IF EXISTS GPGROWTH_STRATEGY;
+CREATE TABLE GPGROWTH_STRATEGY AS
+    WITH GP_QUARTERLYGROWTH AS (
+        SELECT
+            ticker
+            ,rating
+            ,sector
+            ,industry
+            ,AVG(GrossProfitGrowth) AS GrowthAvg
+        FROM CALC_METRICS
+        GROUP BY 1,2,3,4
+    ),
+    GP_INDUSTRYAVG AS (
+        SELECT
+            industry
+            ,AVG(GrossProfitGrowth) AS IndustryAvg
+        FROM CALC_METRICS
+        GROUP BY 1
+    ),
+    GP_INDUSTRYRANK AS (
+        SELECT
+            G.ticker
+            ,G.rating
+            ,G.sector
+            ,G.industry
+            ,G.GrowthAvg
+            ,RANK() OVER (PARTITION BY G.industry ORDER BY G.GrowthAvg DESC) AS IndustryRank
+            ,CASE 
+                WHEN G.GrowthAvg > I.IndustryAvg THEN 'Overperforms'
+                WHEN G.GrowthAvg < I.IndustryAvg THEN 'Underperforms'
+                ELSE 'Neutral'
+            END AS GrowthPerformance
+        FROM GP_QUARTERLYGROWTH AS G
+            LEFT JOIN GP_INDUSTRYAVG AS I ON 1=1
+                AND G.industry = I.industry
+    )
+    SELECT
+        ticker
+        ,rating
+        ,sector
+        ,industry
+        ,GrowthAvg
+        ,IndustryRank
+        ,GrowthPerformance
+    FROM GP_INDUSTRYRANK
+;
+
+
+--  Total Revenue Growth Strategy
+
+DROP TABLE IF EXISTS TRGROWTH_STRATEGY;
+CREATE TABLE TRGROWTH_STRATEGY AS
+    WITH TR_QUARTERLYGROWTH AS (
+        SELECT
+            ticker
+            ,rating
+            ,sector
+            ,industry
+            ,AVG(TotalRevenueGrowth) AS GrowthAvg
+        FROM CALC_METRICS
+        GROUP BY 1,2,3
+    ),
+    TR_INDUSTRYAVG AS (
+        SELECT
+            industry
+            ,AVG(TotalRevenueGrowth) AS IndustryAvg
+        FROM CALC_METRICS
+        GROUP BY 1
+    ),
+    TR_INDUSTRYRANK AS (
+        SELECT
+            G.ticker
+            ,G.rating
+            ,G.sector
+            ,G.industry
+            ,G.GrowthAvg
+            ,RANK() OVER (PARTITION BY G.industry ORDER BY G.GrowthAvg DESC) AS IndustryRank
+            ,CASE 
+                WHEN G.GrowthAvg > I.IndustryAvg THEN 'Overperforms'
+                WHEN G.GrowthAvg < I.IndustryAvg THEN 'Underperforms'
+                ELSE 'Neutral'
+            END AS GrowthPerformance
+        FROM TR_QUARTERLYGROWTH AS G
+            LEFT JOIN TR_INDUSTRYAVG AS I ON 1=1
+                AND G.industry = I.industry
+    )
+    SELECT
+        ticker
+        ,rating
+        ,sector
+        ,industry
+        ,GrowthAvg
+        ,IndustryRank
+        ,GrowthPerformance
+    FROM TR_INDUSTRYRANK
+;
+
+
+-- Free Cash Flow Growth Strategy
+
+DROP TABLE IF EXISTS FCFGROWTH_STRATEGY;
+CREATE TABLE FCFGROWTH_STRATEGY AS
+    WITH FCF_QUARTERLYGROWTH AS (
+        SELECT
+            ticker
+            ,rating
+            ,sector
+            ,industry
+            ,AVG(FreeCashFlowGrowth) AS GrowthAvg
+        FROM CALC_METRICS
+        GROUP BY 1,2,3
+    ),
+    FCF_INDUSTRYAVG AS (
+        SELECT
+            industry
+            ,AVG(FreeCashFlowGrowth) AS IndustryAvg
+        FROM CALC_METRICS
+        GROUP BY 1
+    ),
+    FCF_INDUSTRYRANK AS (
+        SELECT
+            G.ticker
+            ,G.rating
+            ,G.sector
+            ,G.industry
+            ,G.GrowthAvg
+            ,RANK() OVER (PARTITION BY G.industry ORDER BY G.GrowthAvg DESC) AS IndustryRank
+            ,CASE 
+                WHEN G.GrowthAvg > I.IndustryAvg THEN 'Overperforms'
+                WHEN G.GrowthAvg < I.IndustryAvg THEN 'Underperforms'
+                ELSE 'Neutral'
+            END AS GrowthPerformance
+        FROM FCF_QUARTERLYGROWTH AS G
+            LEFT JOIN FCF_INDUSTRYAVG AS I ON 1=1
+                AND G.industry = I.industry
+    )
+    SELECT
+        ticker
+        ,rating
+        ,sector
+        ,industry
+        ,GrowthAvg
+        ,IndustryRank
+        ,GrowthPerformance
+    FROM FCF_INDUSTRYRANK
+;
+
+
+-- Create final table for INTEGRATED Strategy in Python
+
+DROP TABLE IF EXISTS GROWTH_STRATEGIES;
+CREATE TABLE GROWTH_STRATEGIES AS
+    SELECT 
+        TR.ticker
+        ,TR.rating
+        ,TR.sector
+        ,TR.industry
+        ,TR.GrowthAvg AS TotalRevenueGrowthAvg
+        ,TR.IndustryRank AS TotalRevenueIndustryRank
+        ,TR.GrowthPerformance AS TotalRevenueGrowthPerformance
+        ,GP.GrowthAvg AS GrossProfitGrowthAvg
+        ,GP.IndustryRank AS GrossProfitIndustryRank
+        ,GP.GrowthPerformance AS GrossProfitGrowthPerformance
+        ,FCF.GrowthAvg AS FreeCashFlowGrowthAvg
+        ,FCF.IndustryRank AS FreeCashFlowIndustryRank
+        ,FCF.GrowthPerformance AS FreeCashFlowGrowthPerformance
+    FROM TRGROWTH_STRATEGY AS TR 
+        LEFT JOIN GPGROWTH_STRATEGY AS GP ON 1=1
+            AND TR.ticker = GP.ticker
+        LEFT JOIN FCFGROWTH_STRATEGY AS FCF ON 1=1
+            AND TR.ticker = FCF.ticker
+;
