@@ -1,0 +1,28 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints/
+
+# --- Virtual Environments ---
+venv/
+.venv/
+env/
+
+# --- Operating System Junk ---
+.DS_Store
+Thumbs.db
+
+# --- Data & Databases ---
+# We ignore these because they can be large or contain sensitive info.
+# The folder structure is kept, but files inside are ignored.
+data/*.csv
+data/*.xlsx
+data/*.json
+*.db
+*.sqlite3
+
+# --- Secrets ---
+.env
