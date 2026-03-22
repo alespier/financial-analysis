@@ -1,0 +1,9 @@
+name: finance
+channels:
+  - defaults
+dependencies:
+  - pandas
+  - ipykernel
+  - matplotlib
+  - scipy
+prefix: /opt/anaconda3/envs/finance
